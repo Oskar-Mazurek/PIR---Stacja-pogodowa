@@ -204,16 +204,22 @@ void loop() {
   if (currPage <= 0) currPage = 0;  //zabezpieczenie przed wyjściem poza zakres stron
   if (currPage >= 5) currPage = 5;
   if (currPage2 > 4) currPage2 = 0;
-  //miganie diod gdy za zimno
+  //miganie diod na niebiesko gdy za zimno
   if (temperature > 30.0 && now - last2 > TIMEDELTA2) {
     last2 = now;
     lightLeds(100, 0, 0);
     lightLeds(0, 0, 0);
   }
-  //miganie diod gdy za ciepło
+  //miganie diod na czerwono gdy za ciepło
   if (temperature < 0.0 && now - last2 > TIMEDELTA2) {
     last2 = now;
     lightLeds(0, 0, 100);
+    lightLeds(0, 0, 0);
+  }
+  //miganie diod na zielono gdy w sam raz
+  if (temperature >= 20 && temperature < 25 && now - last2 > TIMEDELTA2) {
+    last2 = now;
+    lightLeds(0, 100, 0);
     lightLeds(0, 0, 0);
   }
 }
