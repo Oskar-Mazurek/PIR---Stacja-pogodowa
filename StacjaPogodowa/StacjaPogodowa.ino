@@ -32,6 +32,8 @@ float batVoltage = 0.0;  //zmienne do odczytu stanu baterii urządzenia
 float batPercentage = 0.0;
 char timeStrbuff[64];  //tablice do przechowywania daty i godziny
 char timeStrbuff2[64];
+char hour[64];
+char date[64];
 int8_t currPage = 0, currPage2 = 0;  //zmienne sterujące ekranami
 char dispRefresh = 1;                //zmienna do odświeżania ekranu
 float temperature = 0.0;             //zmienne do przechowywania aktualnych odczytów
@@ -204,13 +206,13 @@ void loop() {
   if (currPage <= 0) currPage = 0;  //zabezpieczenie przed wyjściem poza zakres stron
   if (currPage >= 5) currPage = 5;
   if (currPage2 > 4) currPage2 = 0;
-  //miganie diod na niebiesko gdy za zimno
+  //miganie diod na niebiesko gdy za ciepło
   if (temperature > 30.0 && now - last2 > TIMEDELTA2) {
     last2 = now;
     lightLeds(100, 0, 0);
     lightLeds(0, 0, 0);
   }
-  //miganie diod na czerwono gdy za ciepło
+  //miganie diod na czerwono gdy za zimno
   if (temperature < 0.0 && now - last2 > TIMEDELTA2) {
     last2 = now;
     lightLeds(0, 0, 100);
@@ -315,15 +317,20 @@ void setTimeInternet() {  //pobranie czasu z internetu
 }
 
 void displayTime() {  //wyświetlenie aktualnego czasu
-  M5.Lcd.setTextSize(3);
-  M5.Lcd.setCursor(10, 10);
   M5.Rtc.GetTime(&RTCtime);
   M5.Rtc.GetDate(&RTCDate);
   sprintf(timeStrbuff, "%2d:%02d:%02d\n%2d.%02d.%04d", RTCtime.Hours,
           RTCtime.Minutes, RTCtime.Seconds, RTCDate.Date, RTCDate.Month,
           RTCDate.Year);
+  sprintf(hour, "%2d:%02d", RTCtime.Hours, RTCtime.Minutes);
+  sprintf(date, "%2d.%02d.%04d", RTCDate.Date, RTCDate.Month, RTCDate.Year);
   M5.Lcd.setTextColor(YELLOW, BLACK);
-  M5.Lcd.println(timeStrbuff);
+  M5.Lcd.setTextSize(6);
+  M5.Lcd.setCursor(80, 145);
+  M5.Lcd.println(hour);
+  M5.Lcd.setTextSize(3);
+  M5.Lcd.setCursor(80, 205);
+  M5.Lcd.println(date);
 }
 
 void sensing() {  //pobieranie wartości odczytów z czujników
@@ -382,17 +389,20 @@ void sensing() {  //pobieranie wartości odczytów z czujników
 void page1() {  //wyświetlenie aktuanych odczytów na pierwszej stronie
   M5.Lcd.setTextColor(YELLOW, BLACK);
   displayTime();
-  M5.Lcd.setTextColor(WHITE, BLACK);
-  M5.Lcd.setTextSize(3);
-  M5.Lcd.setCursor(0, 80);
-  M5.Lcd.println("Current readings:");
-  M5.Lcd.setCursor(0, 110);
-  M5.Lcd.setTextColor(YELLOW, BLACK);
-  M5.Lcd.printf("Temperature:%.1f%c\n", temperature, 'C');
-  M5.Lcd.setCursor(0, 145);
-  M5.Lcd.printf("Humidity:%.1f%%\n", humidity);
-  M5.Lcd.setCursor(0, 185);
-  M5.Lcd.printf("Pressure:%.1fhPa\n", pressure / 100);
+  M5.Lcd.drawLine(10, 135, 310, 135, WHITE);
+  M5.Lcd.setCursor(10, 10);
+  M5.Lcd.setTextSize(2);
+  M5.Lcd.println("FORECAST");
+  if (temperature <= 2.0) M5.Lcd.drawJpgFile(SD, "/snowflake.jpg", 150, 5);
+  else if (humidity >= 90.0) M5.Lcd.drawJpgFile(SD, "/rain.jpg", 150, 5);
+  else if (temperature >= 27.0 && humidity < 90.0) M5.Lcd.drawJpgFile(SD, "/sun.jpg", 150, 5);
+  else M5.Lcd.drawJpgFile(SD, "/sunAndCloud.jpg", 150, 5);
+  M5.Lcd.setCursor(1, 50);
+  M5.Lcd.printf("TEMPERATURE: %.1f C", temperature);
+  M5.Lcd.setCursor(1, 80);
+  M5.Lcd.printf("HUMIDITY: %.1f% %", humidity);
+  M5.Lcd.setCursor(1, 110);
+  M5.Lcd.printf("PRESSURE: %.1f hPa", pressure / 100.0);
 }
 
 void page2() {  //wyświetlenie trendu zmian odczytów na drugiej stronie
@@ -616,6 +626,9 @@ void biggerT() {  //wyświetlenie aktualnej temperatury większą czcionką
   M5.Lcd.printf("Temperature:");
   M5.Lcd.setCursor(50, 100);
   M5.Lcd.printf("%.1f %c\n", temperature, 'C');
+  if (temperature <= 2.0) M5.Lcd.drawJpgFile(SD, "/snowflake.jpg", 210, 100);
+  else if (temperature >= 27.0) M5.Lcd.drawJpgFile(SD, "/sunAndCloud.jpg", 210, 100);
+  else M5.Lcd.drawJpgFile(SD, "/sunAndCloud.jpg", 210, 100);
 }
 
 void biggerH() {  //wyświetlenie aktualnej wilgotności większą czcionką
@@ -625,6 +638,7 @@ void biggerH() {  //wyświetlenie aktualnej wilgotności większą czcionką
   M5.Lcd.printf("Humidity:");
   M5.Lcd.setCursor(50, 100);
   M5.Lcd.printf("%.1f %%\n", humidity);
+  if (humidity >= 90.0) M5.Lcd.drawJpgFile(SD, "/rain.jpg", 210, 100);
 }
 
 void biggerP() {  //wyświetlenie aktualnego ciśnienia większą czcionką
@@ -685,7 +699,7 @@ void readFile(fs::FS &fs, const char *path) {  //odczyt z pliku
       if (x == 3) humidities[i] = atof(strs[x].c_str());
       if (x == 4) pressures[i] = atof(strs[x].c_str());
       if (temperatures[i] > maxT) maxT = temperatures[i];  //wyznaczanie watrości minimalnych i maksymalnych odczytów
-      if (humidities[i] > maxH) maxH = humidities[i];
+      if (humidities[i] > maxH && humidities[i] <= 100) maxH = humidities[i];
       if (pressures[i] > maxP) maxP = pressures[i];
       if (temperatures[i] < minT || minT == 0.0) minT = temperatures[i];
       if (humidities[i] < minH || minH == 0.0) minH = humidities[i];
