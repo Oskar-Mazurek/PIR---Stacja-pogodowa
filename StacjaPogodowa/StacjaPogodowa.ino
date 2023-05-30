@@ -1,9 +1,10 @@
-#include <M5Core2.h>  //podstawowa biblioteka do obsługi modułu M5Stack Core2
-#include <WiFi.h>     //biblioteka umożliwiająca zastosowanie sieci WiFi
-#include "M5_ENV.h"   //biblioteka umożliwająca odczyty z czujników
-#include "FastLED.h"  //bibloteka umożliwająca wykorzystanie diod LED
-#include <string.h>   //bibloteka dająca dostęp do typu String
-#include <Arduino.h>  //bibloteka dająca dostęp do funkcjonalności modułu ESP32, w tym projekcie przydatna do skorzystania z karty SD
+#include <M5Core2.h>       //podstawowa biblioteka do obsługi modułu M5Stack Core2
+#include <WiFi.h>          //biblioteka umożliwiająca zastosowanie sieci WiFi
+#include "M5_ENV.h"        //biblioteka umożliwająca odczyty z czujników
+#include "FastLED.h"       //bibloteka umożliwająca wykorzystanie diod LED
+#include <string.h>        //bibloteka dająca dostęp do typu String
+#include <Arduino.h>       //bibloteka dająca dostęp do funkcjonalności modułu ESP32, w tym projekcie przydatna do skorzystania z karty SD
+#include <PubSubClient.h>  //MQTT
 
 //Stałe
 #define LEDS_PIN 25      //pin GPIO dla diod
@@ -15,6 +16,7 @@
 
 //Pomocnicze zmienne
 WiFiClient espClient;
+PubSubClient client(espClient);
 CRGB ledsBuff[LEDS_NUM];
 RTC_TimeTypeDef RTCtime;
 RTC_DateTypeDef RTCDate;
@@ -25,6 +27,10 @@ const char *ssid = "Brutek";  //dane do pierwszego połączenia z siecią WiFi
 const char *password = "00000000";
 const char *ssid2 = "PLAY Internet 4G LTE-195671";  //dane do drugiego połączenia z siecią WiFi
 const char *password2 = "30195671";
+const char *mqttServer = "test.mosquitto.org";
+// zmienne do MQTT
+char msg;
+String messageTemp;
 const char *ntpServer = "tempus1.gum.gov.pl";  //adres serwera daty
 const long gmtOffset_sec = 3600;
 const int daylightOffset_sec = 3600;
@@ -49,8 +55,12 @@ float maxT = 0.0, maxH = 0.0, maxP = 0.0, minT = 100, minH = 100, minP = 1000000
 char *path = "/readings.csv";                                                                    //ścieżka do pliku z odczytami zapisanymi na karcie SD
 char *path2 = "/ID.txt";                                                                         //ścieżka do pliku z zapisanym numerem odczytu na karcie SD
 char IDm[5];                                                                                     //tablica znakowa do przygotowania zmiennej ID do zapisu w pliku
-
+int MQTTf = 0;
 float temperatures[320], humidities[320], pressures[320], hours[320], minutes[320];  //tablice pomocnicze przechowujące zawartość odcztów, służą do rysowania wykresów
+const char *mqtt_clientid = "Client1395XR";
+char tempString[8];
+char HString[8];
+char PString[8];
 
 //Prototypy funkcji
 void setupWifi();                                                    // funkcja umożliwiająca ustanowienie połączenia z siecią WiFi
@@ -77,6 +87,9 @@ void getID();                                                        //funkcja d
 void setTime();                                                      //funkcja realizująca wizualizację umożliwiającą ręczne ustawienie daty i godziny
 void setupTime();                                                    //funkcja ustawiająca datę i godzinę przy włączeniu urządzenia
 void setTimeInternet();                                              //funkcja ustawiająca datę i godzinę pobraną z Internetu
+void callback(char *topic, byte *payload, unsigned int length);
+void reConnect();
+void sendMessageMQTT();
 
 HotZone d1(10, 10, 40, 40);  //wirtualne przyciski dotykowe do ręcznej zmiany daty i godziny
 HotZone m1(10, 60, 40, 90);
@@ -129,12 +142,15 @@ void setup() {
   M5.Lcd.printf("SD Card Size: %lluMB\n", cardSize);
   delay(1000);
   M5.Lcd.clear();
-  sensing();  //pierwszy pomiar po włączeniu urządzenia
+  sensing();                           //pierwszy pomiar po włączeniu urządzenia
+  client.setServer(mqttServer, 1883);  //Sets the server details
+  client.setCallback(callback);        //Sets the message callback function
 }
 
 void loop() {
   // put your main code here, to run repeatedly:
   M5.update();
+  client.loop();
   now = millis();
   if (now - last > TIMEDELTA) {  //okresowo wykonywane pomiary temperatury, wilgotności i ciśnienia
     last = now;
@@ -187,42 +203,54 @@ void loop() {
       break;
   }
   //zmiana strony
-  if (M5.BtnC.wasReleased()) {  //w prawo
+  if (M5.BtnC.wasReleased() || msg == 'C') {  //w prawo
     if (currPage >= 0 && currPage < 6) {
       currPage++;
       dispRefresh = 1;
     }
-  } else if (M5.BtnA.wasReleased()) {  //w lewo
+    msg = 'N';
+  } else if (M5.BtnA.wasReleased() || msg == 'A') {  //w lewo
     if (currPage >= 0 && currPage < 6) {
       currPage--;
       dispRefresh = 1;
     }
-  } else if (M5.BtnB.wasReleased()) {  //w górę
+    msg = 'N';
+  } else if (M5.BtnB.wasReleased() || msg == 'B') {  //w górę
     if (currPage2 >= 0 && currPage < 5) {
       currPage2++;
       dispRefresh = 1;
     }
+    msg = 'N';
   }
   if (currPage <= 0) currPage = 0;  //zabezpieczenie przed wyjściem poza zakres stron
   if (currPage >= 5) currPage = 5;
   if (currPage2 > 4) currPage2 = 0;
-  //miganie diod na niebiesko gdy za ciepło
+  //miganie diod na czerwono gdy za ciepło
   if (temperature > 30.0 && now - last2 > TIMEDELTA2) {
+    tone(2, 1000);
     last2 = now;
     lightLeds(100, 0, 0);
+    delay(2000);
     lightLeds(0, 0, 0);
+    noTone(2);
   }
-  //miganie diod na czerwono gdy za zimno
+  //miganie diod na niebiesko gdy za zimno
   if (temperature < 0.0 && now - last2 > TIMEDELTA2) {
+    tone(2, 1000);
     last2 = now;
     lightLeds(0, 0, 100);
+    delay(2000);
     lightLeds(0, 0, 0);
+    noTone(2);
   }
   //miganie diod na zielono gdy w sam raz
   if (temperature >= 20 && temperature < 25 && now - last2 > TIMEDELTA2) {
+    tone(2, 1000);
     last2 = now;
     lightLeds(0, 100, 0);
+    delay(2000);
     lightLeds(0, 0, 0);
+    noTone(2);
   }
 }
 
@@ -247,6 +275,8 @@ void setupWifi() {  //ustanowienie połączenia z siecią wifi
     lightLeds(0, 100, 0);
     delay(200);
     lightLeds(0, 0, 0);
+    MQTTf = 1;
+    reConnect();
     dispRefresh = 1;
     return;
   }
@@ -268,6 +298,8 @@ void setupWifi() {  //ustanowienie połączenia z siecią wifi
     lightLeds(0, 100, 0);
     delay(200);
     lightLeds(0, 0, 0);
+    reConnect();
+    MQTTf = 1;
     dispRefresh = 1;
     return;
   }
@@ -280,6 +312,8 @@ void displayBatPercentage() {  //wyświetalnie poziomu naładowania baterii
   M5.Lcd.setCursor(270, 10);
   M5.Lcd.setTextSize(2);
   M5.Lcd.printf("%d%%\n", (int)batPercentage);
+  M5.Lcd.fillRect(230, 10, 20, 10, 0);
+  M5.Lcd.progressBar(230, 10, 20, 10, (int)batPercentage);
 }
 
 void lightLeds(int R, int G, int B) {  //zapalanie diod na określony kolor
@@ -334,7 +368,6 @@ void displayTime() {  //wyświetlenie aktualnego czasu
 }
 
 void sensing() {  //pobieranie wartości odczytów z czujników
-  lightLeds(36, 100, 250);
   pressure = qmp6988.calcPressure();
   if (sht30.get() == 0) {
     temperature = sht30.cTemp;
@@ -368,6 +401,9 @@ void sensing() {  //pobieranie wartości odczytów z czujników
     minH = 100;
     minP = 100000;
   }
+  lightLeds(36, 100, 250);
+  M5.Axp.SetLDOEnable(3, true);
+
   getID();  //pobór aktuanego ID odczytu
   ID++;     // zwiększenie ID o 1
   char message[64];
@@ -384,6 +420,12 @@ void sensing() {  //pobieranie wartości odczytów z czujników
   sprintf(IDm, "%d", ID);                                                                   //przygotowanie ID odczytu do zapisu
   writeFile(SD, path2, IDm);                                                                //zapis nowego ID do pliku
   lightLeds(0, 0, 0);
+  M5.Axp.SetLDOEnable(3, false);
+
+  //Serial.printf("MQTTf: %d\n\n", MQTTf);
+  if (MQTTf == 1 || (WiFi.status() == WL_CONNECTED)) {
+    sendMessageMQTT();
+  }
 }
 
 void page1() {  //wyświetlenie aktuanych odczytów na pierwszej stronie
@@ -845,9 +887,10 @@ void setTime() {  //strona umożliwiająca ręczne dostosowanie i zapisanie czas
     setupWifi();
     setTimeInternet();
   }
-  if (btnD.inHotZone(pos)) {
+  if (btnD.inHotZone(pos) || msg == 'O') {
     if (!M5.Rtc.SetTime(&RTCtime)) Serial.println("Wrong time set!");
     if (!M5.Rtc.SetDate(&RTCDate)) Serial.println("Wrong date set!");
+    msg = 'N';
     currPage2 = 0;
     dispRefresh = 1;
   }
@@ -862,4 +905,54 @@ void setupTime() {  //ustawienie czasu po włączeniu urządzenia
   RTCDate.Month = 3;
   RTCDate.Date = 21;
   if (!M5.Rtc.SetDate(&RTCDate)) Serial.println("Wrong date set!");
+}
+
+void callback(char *topic, byte *payload, unsigned int length) {
+  lightLeds(255, 215, 0);
+  char m;
+  Serial.print("Message arrived in topic: ");
+  Serial.println(topic);
+
+  Serial.print("Message:");
+  for (int i = 0; i < length; i++) {
+    Serial.print((char)payload[i]);
+    m = (char)payload[i];
+  }
+  msg = m;
+  Serial.print(m);
+  Serial.println();
+  Serial.println("-----------------------");
+  Serial.print(length);
+  lightLeds(0, 0, 0);
+}
+
+void reConnect() {
+  while (!client.connected()) {
+    M5.Lcd.print("Attempting MQTT connection...");
+    if (client.connect(mqtt_clientid))  // Attempt to connect
+    {
+      M5.Lcd.printf("\nSuccess\n");
+      client.subscribe("M5Stack/control");
+    } else {
+      M5.Lcd.print("failed, rc=");
+      M5.Lcd.print(client.state());
+      M5.Lcd.println("try again in 5 seconds");
+      delay(5000);
+    }
+  }
+}
+
+void sendMessageMQTT() {
+  if (!client.connected()) {
+    reConnect();
+  }
+  client.loop();  // This function is called periodically to allow clients
+                  // to process incoming messages and maintain connections
+  // Format to the specified string and store it in MSG
+  dtostrf(temperature, 1, 2, tempString);
+  client.publish("M5Stack/readings/temperature", tempString);
+  dtostrf(humidity, 1, 2, HString);
+  client.publish("M5Stack/readings/humidity", HString);
+  dtostrf(pressure / 100.0, 1, 2, PString);
+  client.publish("M5Stack/readings/pressure", PString);
 }
