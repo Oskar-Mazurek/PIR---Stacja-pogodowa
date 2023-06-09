@@ -7,9 +7,9 @@
 #include <PubSubClient.h>  //MQTT
 
 //Stałe
-#define LEDS_PIN 25      //pin GPIO dla diod
-#define LEDS_NUM 10      //ilość diod
-#define TIMEDELTA 60000  //stałe czasowe do okresowego wywoływania funkcji
+#define LEDS_PIN 25       //pin GPIO dla diod
+#define LEDS_NUM 10       //ilość diod
+#define TIMEDELTA 180000  //stałe czasowe do okresowego wywoływania funkcji
 #define TIMEDELTA2 180000
 #define TIMEDELTA3 259200000
 #define TIMEDELTAWIFI 10000
@@ -49,7 +49,7 @@ unsigned long now;  //zmienne do sterowania okresowością wywoływania funkcji
 unsigned long last = 0;
 unsigned long last2 = 0, last3 = 0;
 unsigned long lastW = 0, nowW;
-int ID;                                                                                          //zmienna przechowująca aktualny numer odczytu z czujników
+int ID, zmierzono = 0;                                                                           //zmienna przechowująca aktualny numer odczytu z czujników
 float t1 = 0.0, t2 = 0.0, h1 = 0.0, h2 = 0.0, p1 = 0.0, p2 = 0.0, t3 = 0.0, h3 = 0.0, p3 = 0.0;  // zmienne do obliczania trendu zmiany odczytów
 float maxT = 0.0, maxH = 0.0, maxP = 0.0, minT = 100, minH = 100, minP = 1000000;                //zmienne do przechowywania minimalnych i maksymalnych odczytów
 char *path = "/readings.csv";                                                                    //ścieżka do pliku z odczytami zapisanymi na karcie SD
@@ -61,6 +61,10 @@ const char *mqtt_clientid = "Client1395XR";
 char tempString[8];
 char HString[8];
 char PString[8];
+int symulacja = 0;
+float temperatureS = 0.0;  //zmienne do przechowywania aktualnych odczytów
+float humidityS = 0.0;
+float pressureS = 0.0;
 
 //Prototypy funkcji
 void setupWifi();                                                    // funkcja umożliwiająca ustanowienie połączenia z siecią WiFi
@@ -155,6 +159,7 @@ void loop() {
   if (now - last > TIMEDELTA) {  //okresowo wykonywane pomiary temperatury, wilgotności i ciśnienia
     last = now;
     sensing();
+
   }
   if (dispRefresh) {  //odświerzenie zawartości ekranu po zmianie strony
     M5.Lcd.fillScreen(BLACK);
@@ -426,6 +431,22 @@ void sensing() {  //pobieranie wartości odczytów z czujników
   if (MQTTf == 1 || (WiFi.status() == WL_CONNECTED)) {
     sendMessageMQTT();
   }
+      //przesyłanie trendu zmiany temperatury przez MQTT do Node-red
+  if (t1 > t2 && t2 > t3) client.publish("M5Stack/readings/TTrend", " >>");
+  else if (t1 == t2 && t2 == t3) client.publish("M5Stack/readings/TTrend", " --");
+  else if (t1 < t2 && t2 < t3) client.publish("M5Stack/readings/TTrend", " <<");
+  else client.publish("M5Stack/readings/TTrend", " --");
+  //przesyłanie trendu zmiany wilgotności przez MQTT do Node-red
+  if (h1 > h2 && h2 > h3) client.publish("M5Stack/readings/HTrend", " >>");
+  else if (h1 == h2 && h2 == h3) client.publish("M5Stack/readings/HTrend", " --");
+  else if (h1 < h2 && h2 < h3) client.publish("M5Stack/readings/HTrend", " <<");
+  else client.publish("M5Stack/readings/HTrend", " --");
+  //przesyłanie trendu zmiany ciśnienia przez MQTT do Node-red
+  if (p1 > p2 && p2 > p3) client.publish("M5Stack/readings/PTrend", " >>");
+  else if (p1 == p2 && p2 == p3) client.publish("M5Stack/readings/PTrend", " --");
+  else if (p1 < p2 && p2 < p3) client.publish("M5Stack/readings/PTrend", " <<");
+  else client.publish("M5Stack/readings/PTrend", " <<");
+  zmierzono=1;
 }
 
 void page1() {  //wyświetlenie aktuanych odczytów na pierwszej stronie
@@ -445,9 +466,11 @@ void page1() {  //wyświetlenie aktuanych odczytów na pierwszej stronie
   M5.Lcd.printf("HUMIDITY: %.1f% %", humidity);
   M5.Lcd.setCursor(1, 110);
   M5.Lcd.printf("PRESSURE: %.1f hPa", pressure / 100.0);
+  client.publish("M5Stack/readings/page", "wyświetlenie aktuanych odczytów na pierwszej stronie");
 }
 
 void page2() {  //wyświetlenie trendu zmian odczytów na drugiej stronie
+  client.publish("M5Stack/readings/page", "wyświetlenie trendu zmian odczytów na drugiej stronie");
   M5.Lcd.setCursor(1, 30);
   M5.Lcd.setTextColor(WHITE, BLACK);
   M5.Lcd.setTextSize(3);
@@ -459,15 +482,19 @@ void page2() {  //wyświetlenie trendu zmian odczytów na drugiej stronie
   if (t1 > t2 && t2 > t3) {
     M5.Lcd.setTextColor(GREEN, BLACK);
     M5.Lcd.println(" >>");
+    client.publish("M5Stack/readings/TTrend", " >>");
   } else if (t1 == t2 && t2 == t3) {
     M5.Lcd.setTextColor(WHITE, BLACK);
     M5.Lcd.println(" --");
+    client.publish("M5Stack/readings/TTrend", " --");
   } else if (t1 < t2 && t2 < t3) {
     M5.Lcd.setTextColor(RED, BLACK);
     M5.Lcd.println(" <<");
+    client.publish("M5Stack/readings/TTrend", " <<");
   } else {
     M5.Lcd.setTextColor(WHITE, BLACK);
     M5.Lcd.println(" --");
+    client.publish("M5Stack/readings/TTrend", " --");
   }
   M5.Lcd.setCursor(40, 100);
   M5.Lcd.setTextColor(YELLOW, BLACK);
@@ -475,15 +502,19 @@ void page2() {  //wyświetlenie trendu zmian odczytów na drugiej stronie
   if (h1 > h2 && h2 > h3) {
     M5.Lcd.setTextColor(GREEN, BLACK);
     M5.Lcd.println(" >>");
+    client.publish("M5Stack/readings/HTrend", " >>");
   } else if (h1 == h2 && h2 == h3) {
     M5.Lcd.setTextColor(WHITE, BLACK);
     M5.Lcd.println(" --");
+    client.publish("M5Stack/readings/HTrend", " --");
   } else if (h1 < h2 && h2 < h3) {
     M5.Lcd.setTextColor(RED, BLACK);
     M5.Lcd.println(" <<");
+    client.publish("M5Stack/readings/HTrend", " <<");
   } else {
     M5.Lcd.setTextColor(WHITE, BLACK);
     M5.Lcd.println(" --");
+    client.publish("M5Stack/readings/HTrend", " --");
   }
   M5.Lcd.setCursor(40, 130);
   M5.Lcd.setTextColor(0xFD20, BLACK);
@@ -491,20 +522,25 @@ void page2() {  //wyświetlenie trendu zmian odczytów na drugiej stronie
   if (p1 > p2 && p2 > p3) {
     M5.Lcd.setTextColor(GREEN, BLACK);
     M5.Lcd.println(" >>");
+    client.publish("M5Stack/readings/PTrend", " >>");
   } else if (p1 == p2 && p2 == p3) {
     M5.Lcd.setTextColor(WHITE, BLACK);
     M5.Lcd.println(" --");
+    client.publish("M5Stack/readings/PTrend", " --");
   } else if (p1 < p2 && p2 < p3) {
     M5.Lcd.setTextColor(RED, BLACK);
     M5.Lcd.println(" <<");
+    client.publish("M5Stack/readings/PTrend", " <<");
   } else {
     M5.Lcd.setTextColor(WHITE, BLACK);
     M5.Lcd.println(" --");
+    client.publish("M5Stack/readings/PTrend", " <<");
   }
 }
 
 void page3() {  //wyświetlenie tabeli z minimalnymi i maksymalnymi odczytami na trzeciej stronie
   M5.Lcd.setTextSize(2);
+  client.publish("M5Stack/readings/page", "wyświetlenie tabeli z minimalnymi i maksymalnymi odczytami na trzeciej stronie");
   M5.Lcd.drawLine(0, 80, 320, 80, WHITE);
   M5.Lcd.drawLine(136, 0, 136, 240, WHITE);
   M5.Lcd.drawLine(232, 0, 232, 240, WHITE);
@@ -569,6 +605,7 @@ void drawAxes() {
 }
 
 void page4() {  //wyświetlenie wykresu zmian temperatury na czwartej stronie
+  client.publish("M5Stack/readings/page", "wyświetlenie wykresu zmian temperatury na czwartej stronie");
   //osie wykresów
   M5.Lcd.drawLine(10, 110, 310, 110, CYAN);
   M5.Lcd.drawLine(10, 5, 10, 220, CYAN);
@@ -601,6 +638,7 @@ void page4() {  //wyświetlenie wykresu zmian temperatury na czwartej stronie
   }
 }
 void page5() {  //wyświetlenie wykresu zmian wilgotności na piątej stronie
+  client.publish("M5Stack/readings/page", "wyświetlenie wykresu zmian wilgotności na piątej stronie");
   //osie wykresów
   drawAxes();
   int x = 0;
@@ -627,6 +665,7 @@ void page5() {  //wyświetlenie wykresu zmian wilgotności na piątej stronie
   }
 }
 void page6() {  //wyświetlenie wykresu zmian ciśnienia powietrza na szóstej stronie
+  client.publish("M5Stack/readings/page", "wyświetlenie wykresu zmian ciśnienia powietrza na szóstej stronie");
   //osie wykresów
   drawAxes();
   int x = 0, y = 0;
@@ -662,6 +701,7 @@ void displayPageNum() {  //wyświetlanie numeru aktualnie wyświetlanej strony
 }
 
 void biggerT() {  //wyświetlenie aktualnej temperatury większą czcionką
+  client.publish("M5Stack/readings/page", "wyświetlenie aktualnej temperatury większą czcionką na pierwszej stronie");
   M5.Lcd.setTextSize(4);
   M5.Lcd.setCursor(30, 50);
   M5.Lcd.setTextColor(YELLOW, BLACK);
@@ -674,6 +714,7 @@ void biggerT() {  //wyświetlenie aktualnej temperatury większą czcionką
 }
 
 void biggerH() {  //wyświetlenie aktualnej wilgotności większą czcionką
+  client.publish("M5Stack/readings/page", "wyświetlenie aktualnej wilgotności większą czcionką na pierwszej stronie");
   M5.Lcd.setTextSize(4);
   M5.Lcd.setCursor(50, 50);
   M5.Lcd.setTextColor(YELLOW, BLACK);
@@ -684,6 +725,7 @@ void biggerH() {  //wyświetlenie aktualnej wilgotności większą czcionką
 }
 
 void biggerP() {  //wyświetlenie aktualnego ciśnienia większą czcionką
+  client.publish("M5Stack/readings/page", "wyświetlenie aktualnego ciśnienia większą czcionką na pierwszej stronie");
   M5.Lcd.setTextSize(4);
   M5.Lcd.setCursor(50, 50);
   M5.Lcd.setTextColor(YELLOW, BLACK);
@@ -909,7 +951,7 @@ void setupTime() {  //ustawienie czasu po włączeniu urządzenia
 
 void callback(char *topic, byte *payload, unsigned int length) {
   lightLeds(255, 215, 0);
-  char m;
+  char m, p;
   Serial.print("Message arrived in topic: ");
   Serial.println(topic);
 
@@ -917,6 +959,19 @@ void callback(char *topic, byte *payload, unsigned int length) {
   for (int i = 0; i < length; i++) {
     Serial.print((char)payload[i]);
     m = (char)payload[i];
+    p = (char)payload[i];
+  }
+  if (p == 'f') {
+    symulacja = 0;
+    Serial.print("Dane rzeczywiste");
+  }
+  if (p == 't') {
+    symulacja = 1;
+    Serial.print("Dane symulowane");
+  }
+  if (strcmp(topic, "M5Stack/weather/Temp") == 0 && symulacja == 1) {
+    sscanf((char *)payload, "%f", &temperatureS);
+    sendMessageMQTT();
   }
   msg = m;
   Serial.print(m);
@@ -933,6 +988,7 @@ void reConnect() {
     {
       M5.Lcd.printf("\nSuccess\n");
       client.subscribe("M5Stack/control");
+      client.subscribe("M5Stack/weather/Temp");
     } else {
       M5.Lcd.print("failed, rc=");
       M5.Lcd.print(client.state());
@@ -949,10 +1005,24 @@ void sendMessageMQTT() {
   client.loop();  // This function is called periodically to allow clients
                   // to process incoming messages and maintain connections
   // Format to the specified string and store it in MSG
-  dtostrf(temperature, 1, 2, tempString);
-  client.publish("M5Stack/readings/temperature", tempString);
-  dtostrf(humidity, 1, 2, HString);
-  client.publish("M5Stack/readings/humidity", HString);
-  dtostrf(pressure / 100.0, 1, 2, PString);
-  client.publish("M5Stack/readings/pressure", PString);
+
+  if (symulacja == 0) {
+    dtostrf(temperature, 1, 2, tempString);
+    client.publish("M5Stack/readings/temperature", tempString);
+    dtostrf(humidity, 1, 2, HString);
+    client.publish("M5Stack/readings/humidity", HString);
+    dtostrf(pressure / 100.0, 1, 2, PString);
+    client.publish("M5Stack/readings/pressure", PString);
+  }
+  if (symulacja == 1) {
+    dtostrf(temperatureS, 1, 2, tempString);
+    client.publish("M5Stack/readings/temperature", tempString);
+    if (zmierzono==1) {
+      dtostrf(humidity, 1, 2, HString);
+      client.publish("M5Stack/readings/humidity", HString);
+      dtostrf(pressure / 100.0, 1, 2, PString);
+      client.publish("M5Stack/readings/pressure", PString);
+      zmierzono=0;
+    }
+  }
 }
